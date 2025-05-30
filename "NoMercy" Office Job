@@ -1,0 +1,128 @@
+local speed = 0.001 -- Change this to control speed (seconds per wait). Lower = faster, but be careful!
+
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local gui = player.PlayerGui:WaitForChild("MathQuiz")
+local answerFunction = gui.AnswerClicked
+
+-- Configuration
+local totalNeeded = 10
+local completed = 0
+local isFarming = true
+local maxAttempts = 3
+
+local function safeMultiply(a, b)
+    a = tonumber(a) or 0
+    b = tonumber(b) or 0
+    return a * b
+end
+
+local function safeDivide(a, b)
+    a = tonumber(a) or 0
+    b = tonumber(b) or 1
+    if b == 0 then return 0 end
+    return a / b
+end
+
+local function solveQuestion()
+    for attempt = 1, maxAttempts do
+        local success, result = pcall(function()
+            local questionText = gui.MainFrame.QuestionFrame.Question.Text
+
+            local mathExpr = questionText:match("[Qq]uestion:%s*(.-)%s*[=≠?]") or
+                             questionText:match("([%d%.%s%+%-%*/xX×÷]+)%s*[=≠]") or ""
+
+            mathExpr = mathExpr:gsub("%s+", ""):gsub(",", ""):gsub("[xX×]", "*"):gsub("÷", "/")
+
+            if mathExpr:find("*", 1, true) then
+                local num1, num2 = mathExpr:match("^(%-?%d+%.?%d*)%*(%-?%d+%.?%d*)$")
+                if num1 and num2 then return safeMultiply(num1, num2) end
+            end
+
+            if mathExpr:find("/", 1, true) then
+                local num1, num2 = mathExpr:match("^(%-?%d+%.?%d*)/(%-?%d+%.?%d*)$")
+                if num1 and num2 then
+                    if tonumber(num2) == 0 then return "inf_or_nan" end
+                    return safeDivide(num1, num2)
+                end
+            end
+
+            local func = loadstring("return " .. mathExpr)
+            if func then
+                local calcSuccess, answer = pcall(func)
+                if calcSuccess then return answer end
+            end
+            return nil
+        end)
+
+        if success and result then
+            local answer = result
+
+            for _, button in pairs(gui.MainFrame.AnswersFrame:GetChildren()) do
+                if button:IsA("TextButton") then
+                    local buttonText = button.Text:gsub("%s+", "")
+                    local buttonNum = tonumber(buttonText)
+
+                    if answer == "inf_or_nan" and (buttonText:lower() == "inf" or buttonText:lower() == "nan") then
+                        answerFunction:InvokeServer(button)
+                        completed = completed + 1
+                        return true
+                    end
+
+                    if type(answer) == "number" and buttonNum and math.abs(answer - buttonNum) < 0.01 then
+                        answerFunction:InvokeServer(button)
+                        completed = completed + 1
+                        return true
+                    end
+
+                    if buttonText == tostring(answer) then
+                        answerFunction:InvokeServer(button)
+                        completed = completed + 1
+                        return true
+                    end
+                end
+            end
+        end
+
+        task.wait(speed)  -- Controlled by speed variable
+    end
+    return false
+end
+
+local function restartQuiz()
+    if completed >= totalNeeded then
+        completed = 0
+        -- game:GetService("ReplicatedStorage").RestartQuiz:FireServer()
+    end
+end
+
+local function farmLoop()
+    while isFarming do
+        local success = solveQuestion()
+
+        if not isFarming then break end
+
+        if not success then
+            warn("Failed to solve question, recovering...")
+            task.wait(speed)
+        elseif completed >= totalNeeded then
+            restartQuiz()
+            task.wait(speed)
+        else
+            task.wait(speed / 2)
+        end
+    end
+end
+
+local function watchdog()
+    while isFarming do
+        local startTime = os.clock()
+        farmLoop()
+        if os.clock() - startTime > 30 then
+            warn("Watchdog: Restarting farm loop after timeout")
+        end
+        task.wait(speed * 10)
+    end
+end
+
+task.spawn(watchdog)
